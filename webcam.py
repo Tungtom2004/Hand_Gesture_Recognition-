@@ -12,10 +12,9 @@ model = LSTMModel(258, 160, 9).to(device)
 model.load_state_dict(torch.load('F:/TTCS/best_model.pt', map_location=device))
 model.eval()
 
-# Danh sách class
+
 classes = ['hello', 'meet', 'my', 'name', 'nice', 'please', 'sit', 'yes', 'you']
 
-# === Chuẩn hóa giống khi train ===
 def normalize_keypoint_block(block, dim=3):
     if np.all(block == 0):
         return block.flatten()
@@ -39,7 +38,6 @@ def normalize_frames(frame):
 def normalize_keypoints(x):
     return np.array([normalize_frames(f) for f in x])
 
-# === Hàm extract keypoint ===
 def extract_keypoints(results):
     keypoints = []
 
@@ -64,11 +62,22 @@ def extract_keypoints(results):
     return np.array(keypoints)
 
 # === Webcam setup ===
+
 mp_holistic = mp.solutions.holistic
-holistic = mp_holistic.Holistic(static_image_mode=False)
+holistic = mp_holistic.Holistic(
+    static_image_mode=False,
+    model_complexity=0,   
+    smooth_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
 cap = cv2.VideoCapture(0)
 buffer = deque(maxlen=80)
 pred_history = deque(maxlen=5)
+label = ""
+last_pred_time = 0
+frame_count = 0
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -79,14 +88,14 @@ while cap.isOpened():
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = holistic.process(rgb)
     keypoints = extract_keypoints(results)
-    if keypoints is not None and not np.all(keypoints == 0) and np.std(keypoints) > 1e-3:
+
+    if keypoints is not None and np.std(keypoints) > 1e-3:
         buffer.append(keypoints)
 
-    label = ""
-    if len(buffer) == 80:
+    if len(buffer) == 80 and frame_count % 5 == 0:
         x = np.array(buffer)
         x = normalize_keypoints(x)
-        x_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
+        x_tensor = torch.from_numpy(x).float().unsqueeze(0).to(device)
 
         with torch.no_grad():
             output = model(x_tensor)
@@ -98,6 +107,8 @@ while cap.isOpened():
             most_common, count = Counter(pred_history).most_common(1)[0]
             if count >= 3:
                 label = f"{classes[most_common]} ({conf:.2f})"
+        else:
+            label = ""
 
     if label:
         cv2.putText(frame, label, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
@@ -106,5 +117,8 @@ while cap.isOpened():
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+    frame_count += 1
+
 cap.release()
 cv2.destroyAllWindows()
+
